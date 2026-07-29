@@ -663,6 +663,9 @@ class Build {
     mkdirp(root);
 
     for (const [relativePath, file] of Object.entries(this.files)) {
+      if (!file) {
+        continue;
+      }
       const directoryName = pathUtil.dirname(relativePath);
       await mkdirp(pathUtil.join(root, directoryName));
       await fsPromises.writeFile(
@@ -679,6 +682,9 @@ class Build {
     const allStrings = {};
 
     for (const [filePath, file] of Object.entries(this.files)) {
+      if (!file) {
+        continue;
+      }
       let fileStrings;
       try {
         fileStrings = file.getStrings();
@@ -904,7 +910,10 @@ class Builder {
       );
 
     for (const [oldPath, newPath] of Object.entries(compatibilityAliases)) {
-      build.files[oldPath] = build.files[newPath];
+      const target = build.files[newPath];
+      if (target) {
+        build.files[oldPath] = target;
+      }
     }
 
     return build;
