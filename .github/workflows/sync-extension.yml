@@ -22,9 +22,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     if: >-
-      contains(github.event.issue.body, '名称') &&
-      (github.event.issue.user.login == github.event.repository.owner.login ||
-       github.actor == github.event.repository.owner.login)
+      contains(github.event.issue.body, '名称')
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -37,8 +35,31 @@ jobs:
             const path = require('path');
             const { execSync } = require('child_process');
 
-            const body = context.payload.issue.body || '';
             const issueNumber = context.payload.issue.number;
+
+            // 通过 API 取最新 issue 正文（附件以 markdown 链接形式存在于 body/评论中）
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+            const body = issue.data.body || '';
+
+            // 仅允许有关联写入/管理员权限的人关闭的议题同步（兼容组织仓库）
+            try {
+              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: github.actor
+              });
+              if (!['admin', 'write'].includes(perm.permission)) {
+                core.info('关闭者(' + github.actor + ') 无写入权限，跳过同步。');
+                return;
+              }
+            } catch (e) {
+              core.info('权限校验失败，跳过：' + e.message);
+              return;
+            }
 
             // 解析「名称 / 版本 / 作者」，支持每条一行或挤在一行
             const field = (label, nextLabels) => {
