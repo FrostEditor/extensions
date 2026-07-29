@@ -5,7 +5,9 @@ name: Sync Extension from Issue
 #   名称：我的扩展
 #   版本：1.0.0
 #   作者：张三
-# 并附上 .js 文件作为附件。
+# 附件要求：
+#   - 扩展代码：xxx.js
+#   - 封面图：pb.png（用户自行上传，作为该扩展的封面）
 
 on:
   issues:
@@ -112,6 +114,43 @@ jobs:
             fs.mkdirSync(extDir, { recursive: true });
             fs.writeFileSync(path.join(extDir, slug + '.js'), code);
 
+            // 收集封面图（优先名为 pb.png 的附件，其次任意 .png）
+            const pngUrls = [...body.matchAll(/https?:\/\/[^\s)\]]+\.png/gi)].map(m => m[0]);
+            try {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100
+              });
+              for (const c of (comments.data || [])) {
+                pngUrls.push(...(c.body || '').matchAll(/https?:\/\/[^\s)\]]+\.png/gi)].map(m => m[0]));
+              }
+            } catch (e) { /* 忽略 */ }
+            const pbUrl = pngUrls.find(u => /\/pb\.png(\?|$)/i.test(u)) || pngUrls[0];
+            if (pbUrl) {
+              try {
+                const imgRes = await fetch(pbUrl, {
+                  redirect: 'follow',
+                  headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+                });
+                if (imgRes.ok) {
+                  const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+                  const imgDir = 'extensions/images';
+                  fs.mkdirSync(imgDir, { recursive: true });
+                  // 文件名用 slug，builder 会按文件名前缀映射到该扩展封面
+                  fs.writeFileSync(path.join(imgDir, slug + '.png'), imgBuf);
+                  core.info('已保存封面图：' + slug + '.png');
+                } else {
+                  core.info('封面图下载失败：HTTP ' + imgRes.status);
+                }
+              } catch (e) {
+                core.info('封面图处理出错：' + e.message);
+              }
+            } else {
+              core.info('未找到封面图（pb.png），将使用默认封面。');
+            }
+
             // 更新 extensions.json（受支持的扩展列表）
             const jsonPath = path.join(extDir, 'extensions.json');
             let list = [];
@@ -126,7 +165,7 @@ jobs:
             // 提交并推送
             execSync('git config user.name "github-actions[bot]"');
             execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
-            execSync(`git add ${jsonPath} ${path.join(extDir, slug + '.js')}`);
+            execSync(`git add ${jsonPath} ${path.join(extDir, slug + '.js')} extensions/images/${slug}.png`);
             execSync(`git commit -m "sync: ${slug} (from issue #${issueNumber})"`);
             execSync('git push');
 
