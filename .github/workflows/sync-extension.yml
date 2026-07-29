@@ -1,0 +1,139 @@
+name: Sync Extension from Issue
+
+# 管理员关闭议题后，自动把议题里的扩展同步到扩展库并触发部署。
+# 议题格式示例：
+#   名称：我的扩展
+#   版本：1.0.0
+#   作者：张三
+# 并附上 .js 文件作为附件。
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: read
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: >-
+      contains(github.event.issue.body, '名称') &&
+      (github.event.issue.user.login == github.event.repository.owner.login ||
+       github.actor == github.event.repository.owner.login)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Parse issue and sync extension
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { execSync } = require('child_process');
+
+            const body = context.payload.issue.body || '';
+            const issueNumber = context.payload.issue.number;
+
+            // 解析「名称 / 版本 / 作者」，支持每条一行或挤在一行
+            const field = (label, nextLabels) => {
+              const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const next = (nextLabels || []).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+              const pat = next
+                ? `${esc}\\s*[:：]\\s*([\\s\\S]*?)(?=${next}\\s*[:：]|$)`
+                : `${esc}\\s*[:：]\\s*([\\s\\S]*?)$`;
+              const m = body.match(new RegExp(pat, 'i'));
+              return m ? m[1].trim() : '';
+            };
+            const name = field('名称', ['版本', '作者']);
+            const version = field('版本', ['作者']);
+            const author = field('作者');
+
+            if (!name) {
+              core.info('议题未包含「名称」，跳过。');
+              return;
+            }
+
+            // 由名称生成 slug
+            const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            if (!slug) {
+              core.setFailed('无法从「名称」生成 slug：' + name);
+              return;
+            }
+
+            // 收集议题正文 + 所有评论里的 .js 附件链接（网页上传的附件常出现在评论）
+            const jsUrls = [...body.matchAll(/https?:\/\/[^\s)\]]+\.js/gi)].map(m => m[0]);
+            try {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100
+              });
+              for (const c of (comments.data || [])) {
+                const urls = [...(c.body || '').matchAll(/https?:\/\/[^\s)\]]+\.js/gi)].map(m => m[0]);
+                jsUrls.push(...urls);
+              }
+            } catch (e) {
+              core.info('读取评论失败，仅使用正文链接：' + e.message);
+            }
+            if (jsUrls.length === 0) {
+              core.setFailed('议题正文及评论中均未找到 .js 附件链接。');
+              return;
+            }
+            const jsUrl = jsUrls[0];
+
+            // 下载 .js（跟随重定向，带 token 以兼容私有仓库）
+            const res = await fetch(jsUrl, {
+              redirect: 'follow',
+              headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+            });
+            if (!res.ok) {
+              core.setFailed('下载扩展失败：HTTP ' + res.status);
+              return;
+            }
+            let code = await res.text();
+
+            // 若 .js 缺少元信息头，用议题字段补齐
+            if (!/^\s*\/\//.test(code)) {
+              const header = [
+                '// id: ' + slug,
+                '// name: ' + name,
+                author ? '// by: ' + author : '',
+                version ? '// version: ' + version : ''
+              ].filter(Boolean).join('\n');
+              code = header + '\n' + code;
+            }
+
+            const extDir = 'extensions/extensions';
+            fs.mkdirSync(extDir, { recursive: true });
+            fs.writeFileSync(path.join(extDir, slug + '.js'), code);
+
+            // 更新 extensions.json（受支持的扩展列表）
+            const jsonPath = path.join(extDir, 'extensions.json');
+            let list = [];
+            if (fs.existsSync(jsonPath)) {
+              const raw = fs.readFileSync(jsonPath, 'utf-8').replace(/\/\/.*$/gm, '').trim();
+              list = JSON.parse(raw || '[]');
+            }
+            if (!Array.isArray(list)) list = [];
+            if (!list.includes(slug)) list.push(slug);
+            fs.writeFileSync(jsonPath, JSON.stringify(list, null, 2) + '\n');
+
+            // 提交并推送
+            execSync('git config user.name "github-actions[bot]"');
+            execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
+            execSync(`git add ${jsonPath} ${path.join(extDir, slug + '.js')}`);
+            execSync(`git commit -m "sync: ${slug} (from issue #${issueNumber})"`);
+            execSync('git push');
+
+            // 触发部署工作流（GITHUB_TOKEN 的 push 不会自动触发其它工作流，故显式调度）
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'deploy.yml',
+              ref: 'master'
+            });
