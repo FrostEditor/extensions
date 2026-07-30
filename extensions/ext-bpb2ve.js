@@ -4,6 +4,7 @@
 // By: 千絮
 // Version: 1.0.0
 // License: MIT
+// Source: issue #4
 
 (function (Scratch) {
     'use strict';

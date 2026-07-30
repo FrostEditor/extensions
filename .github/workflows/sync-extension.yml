@@ -158,7 +158,25 @@ jobs:
             }
             if (!Array.isArray(list)) list = [];
             log('当前列表已含扩展数 :', list.length);
-            if (list.includes(slug)) {
+
+            // 同一议题重复关闭（reopen 后再 close / 手动重跑）时，
+            // 复用已有 slug 覆盖更新，而不是生成新扩展造成重复。
+            // 依据：已落库 js 头部的「// Source: issue #N」标记。
+            let reusedFromIssue = false;
+            const issueMarker = 'Source: issue #' + issueNumber;
+            for (const existing of list) {
+              const p = path.join(extDir, existing + '.js');
+              if (!fs.existsSync(p)) continue;
+              const head = fs.readFileSync(p, 'utf-8').split('\n').slice(0, 12).join('\n');
+              if (head.includes(issueMarker)) {
+                slug = existing;
+                reusedFromIssue = true;
+                log('♻️ 议题 #' + issueNumber + ' 此前已同步为 :', slug, '→ 本次覆盖更新');
+                break;
+              }
+            }
+
+            if (!reusedFromIssue && list.includes(slug)) {
               let i = 2;
               while (list.includes(slug + '-' + i)) i++;
               slug = slug + '-' + i;
@@ -241,7 +259,8 @@ jobs:
               '// Description: ' + (summary || (name + ' 扩展。')),
               author ? '// By: ' + author : '',
               version ? '// Version: ' + version : '',
-              '// License: MIT'
+              '// License: MIT',
+              '// Source: issue #' + issueNumber
             ].filter(Boolean).join('\n');
             code = header + '\n\n' + code;
             log('注入头 :\n' + header);
