@@ -7,7 +7,7 @@ name: Sync Extension from Issue
 #   作者：张三
 # 附件要求：
 #   - 扩展代码：xxx.js
-#   - 封面图：pb.png（用户自行上传，作为该扩展的封面）
+#   - 封面图：pb.png 或直接拖拽一张图片（作为该扩展的封面）
 
 on:
   issues:
@@ -80,15 +80,55 @@ jobs:
               return;
             }
 
-            // 由名称生成 slug
-            const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            // 生成 ASCII 安全的 slug/id（支持中文等任意名称）
+            // - 若名称含 ASCII 字母/数字，则清洗为 ascii slug
+            // - 否则用名称的确定性短哈希（ext-xxxxxx），避免空 slug 导致失败
+            function makeSlug(input) {
+              const lower = (input || '').toLowerCase().trim();
+              let s = lower
+                .replace(/\s+/g, '-')
+                .replace(/[^a-z0-9-]/g, '')
+                .replace(/-+/g, '-')
+                .replace(/^-+|-+$/g, '');
+              if (s) return s;
+              let h = 0;
+              for (let i = 0; i < (input || '').length; i++) {
+                h = (Math.imul(31, h) + input.charCodeAt(i)) | 0;
+              }
+              return 'ext-' + (h >>> 0).toString(36);
+            }
+            let slug = makeSlug(name);
             if (!slug) {
-              core.setFailed('无法从「名称」生成 slug：' + name);
+              core.setFailed('无法从「名称」生成标识：' + name);
               return;
             }
 
-            // 收集议题正文 + 所有评论里的 .js 附件链接（网页上传的附件常出现在评论）
-            const jsUrls = [...body.matchAll(/https?:\/\/[^\s)\]]+\.js/gi)].map(m => m[0]);
+            const extDir = 'extensions/extensions';
+            fs.mkdirSync(extDir, { recursive: true });
+
+            // 加载现有列表用于 slug 去重
+            const jsonPath = path.join(extDir, 'extensions.json');
+            let list = [];
+            if (fs.existsSync(jsonPath)) {
+              const raw = fs.readFileSync(jsonPath, 'utf-8').replace(/\/\/.*$/gm, '').trim();
+              try { list = JSON.parse(raw || '[]'); } catch (e) { list = []; }
+            }
+            if (!Array.isArray(list)) list = [];
+            if (list.includes(slug)) {
+              let i = 2;
+              while (list.includes(slug + '-' + i)) i++;
+              slug = slug + '-' + i;
+            }
+
+            // 收集议题正文 + 所有评论里的 .js 附件链接
+            // 同时兼容新版 github user-attachments 链接（无 .js 后缀形式）
+            const collectJs = (text) => {
+              const out = [];
+              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.js/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/files\/[^\s)\]]+/gi)) out.push(m[0]);
+              return out;
+            };
+            const jsUrls = collectJs(body);
             try {
               const comments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
@@ -96,10 +136,7 @@ jobs:
                 issue_number: issueNumber,
                 per_page: 100
               });
-              for (const c of (comments.data || [])) {
-                const urls = [...(c.body || '').matchAll(/https?:\/\/[^\s)\]]+\.js/gi)].map(m => m[0]);
-                jsUrls.push(...urls);
-              }
+              for (const c of (comments.data || [])) jsUrls.push(...collectJs(c.body));
             } catch (e) {
               core.info('读取评论失败，仅使用正文链接：' + e.message);
             }
@@ -131,12 +168,17 @@ jobs:
               code = header + '\n' + code;
             }
 
-            const extDir = 'extensions/extensions';
-            fs.mkdirSync(extDir, { recursive: true });
             fs.writeFileSync(path.join(extDir, slug + '.js'), code);
 
-            // 收集封面图（优先名为 pb.png 的附件，其次任意 .png）
-            const pngUrls = [...body.matchAll(/https?:\/\/[^\s)\]]+\.png/gi)].map(m => m[0]);
+            // 收集封面图：优先名为 pb.png 的附件，其次任意图片附件。
+            // 兼容 github user-attachments/assets/<uuid> 形式（无 .png 后缀）。
+            const collectImg = (text) => {
+              const out = [];
+              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.(?:png|jpe?g|gif|webp)/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/assets\/[^\s)\]]+/gi)) out.push(m[0]);
+              return out;
+            };
+            const imgUrls = collectImg(body);
             try {
               const comments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
@@ -144,11 +186,11 @@ jobs:
                 issue_number: issueNumber,
                 per_page: 100
               });
-              for (const c of (comments.data || [])) {
-                pngUrls.push(...(c.body || '').matchAll(/https?:\/\/[^\s)\]]+\.png/gi)].map(m => m[0]));
-              }
+              for (const c of (comments.data || [])) imgUrls.push(...collectImg(c.body));
             } catch (e) { /* 忽略 */ }
-            const pbUrl = pngUrls.find(u => /\/pb\.png(\?|$)/i.test(u)) || pngUrls[0];
+            const pbUrl = imgUrls.find(u => /\/pb\.png(\?|$)/i.test(u)) || imgUrls[0];
+
+            let imagePath = null;
             if (pbUrl) {
               try {
                 const imgRes = await fetch(pbUrl, {
@@ -156,12 +198,16 @@ jobs:
                   headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
                 });
                 if (imgRes.ok) {
-                  const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+                  const buf = Buffer.from(await imgRes.arrayBuffer());
+                  // 依据真实内容判定扩展名（github 可能把 png 重命名为 uuid）
+                  const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+                  const isJpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+                  const ext = isJpg ? 'jpg' : 'png';
                   const imgDir = 'extensions/images';
                   fs.mkdirSync(imgDir, { recursive: true });
-                  // 文件名用 slug，builder 会按文件名前缀映射到该扩展封面
-                  fs.writeFileSync(path.join(imgDir, slug + '.png'), imgBuf);
-                  core.info('已保存封面图：' + slug + '.png');
+                  imagePath = path.join(imgDir, slug + '.' + ext);
+                  fs.writeFileSync(imagePath, buf);
+                  core.info('已保存封面图：' + path.basename(imagePath));
                 } else {
                   core.info('封面图下载失败：HTTP ' + imgRes.status);
                 }
@@ -169,24 +215,19 @@ jobs:
                 core.info('封面图处理出错：' + e.message);
               }
             } else {
-              core.info('未找到封面图（pb.png），将使用默认封面。');
+              core.info('未找到封面图，将使用默认封面。');
             }
 
             // 更新 extensions.json（受支持的扩展列表）
-            const jsonPath = path.join(extDir, 'extensions.json');
-            let list = [];
-            if (fs.existsSync(jsonPath)) {
-              const raw = fs.readFileSync(jsonPath, 'utf-8').replace(/\/\/.*$/gm, '').trim();
-              list = JSON.parse(raw || '[]');
-            }
-            if (!Array.isArray(list)) list = [];
             if (!list.includes(slug)) list.push(slug);
             fs.writeFileSync(jsonPath, JSON.stringify(list, null, 2) + '\n');
 
             // 提交并推送
             execSync('git config user.name "github-actions[bot]"');
             execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
-            execSync(`git add ${jsonPath} ${path.join(extDir, slug + '.js')} extensions/images/${slug}.png`);
+            const addTargets = [jsonPath, path.join(extDir, slug + '.js')];
+            if (imagePath) addTargets.push(imagePath);
+            execSync(`git add ${addTargets.join(' ')}`);
             execSync(`git commit -m "sync: ${slug} (from issue #${issueNumber})"`);
             execSync('git push');
 
