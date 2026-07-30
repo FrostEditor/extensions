@@ -9,44 +9,25 @@ concurrency:
   group: "deploy"
   cancel-in-progress: true
 
-# 分支部署方式：把构建产物推到 gh-pages 分支，由 GitHub Pages 以
-# 「Deploy from a branch」源托管。相比 actions/deploy-pages，这种方式
-# 不依赖 Pages 的「GitHub Actions」源与 OIDC id-token，最稳妥。
-permissions:
-  contents: write
+# extensions.froste.top 由 Cloudflare Pages 直接从 master 分支构建并托管
+# （构建命令 npm run build，产物目录 build/）。本工作流仅作为「构建是否能通过」
+# 的校验；实际部署由 Cloudflare 在 push 到 master 时自动完成，无需此处推送。
+# 注意：不要再把产物推到 gh-pages 分支——Cloudflare 若在 gh-pages 上跑
+# npm run build 会因没有 package.json 而失败（ENOENT）。
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-
-    # 仅部署官方 FrostEditor 仓库。
+    # 仅校验官方 FrostEditor 仓库。
     if: ${{ github.repository == 'FrostEditor/extensions' && github.ref == 'refs/heads/master' }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
-
       - name: Install dependencies
         run: npm ci
-
       - name: Build for production
         run: npm run build
-
-      # 自定义域名由 gh-pages 分支里的 CNAME 决定，构建产物不含此文件，需补回。
-      - name: Ensure custom domain (CNAME)
-        run: cp CNAME build/CNAME
-
-      - name: Deploy to GitHub Pages (branch)
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build
-          publish_branch: gh-pages
-          force_orphan: true
-          user_name: github-actions[bot]
-          user_email: github-actions[bot]@users.noreply.github.com
