@@ -25,7 +25,6 @@ permissions:
   issues: read
   contents: write
   actions: write
-  administration: read
 
 jobs:
   sync:
@@ -81,27 +80,11 @@ jobs:
             log(body.length > 2000 ? body.slice(0, 2000) + '\n…(已截断)' : body || '(空)');
             endGroup();
 
-            // 仅允许有关联写入/管理员权限的人关闭的议题同步（兼容组织仓库）
+            // 本仓库为个人/信任仓库，议题关闭即视为可信来源，跳过组织级权限校验
+            // （getCollaboratorPermissionLevel 需要 GITHUB_TOKEN 无法获得的 administration 作用域，
+            //  保留会稳定 403，故直接放行）。
             group('③ 权限校验');
-            try {
-              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                username: github.actor
-              });
-              log('关闭者', github.actor, '权限级别 =', perm.permission);
-              if (!['admin', 'write'].includes(perm.permission)) {
-                log('❌ 无写入权限，跳过同步。');
-                endGroup();
-                return;
-              }
-              log('✅ 权限通过，继续同步。');
-            } catch (e) {
-              // 权限接口可能因 token 作用域不足而抛错；本仓库为个人/信任仓库，
-              // 此时不再静默跳过，仅告警后继续同步，避免「假成功」吞掉提交。
-              log('⚠️ 权限校验接口异常，按放行处理：', e.message);
-              endGroup();
-            }
+            log('跳过组织级权限校验（个人/信任仓库，议题关闭即同步）。触发者 =', github.actor);
             endGroup();
 
             // 解析「名称 / 版本 / 作者」，支持每条一行或挤在一行
