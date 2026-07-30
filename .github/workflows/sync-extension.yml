@@ -1,12 +1,13 @@
 name: Sync Extension from Issue
 
 # 管理员关闭议题后，自动把议题里的扩展同步到扩展库并触发部署。
-# 议题格式示例：
-#   名称：我的扩展
-#   版本：1.0.0
+# 元数据以【议题正文】为唯一来源（不解析 js 文件的头注释，js 只是附件）：
+#   扩展名称：我的扩展
 #   作者：张三
+#   版本号：1.0.0
+#   简介：这个扩展是干什么的
 # 附件要求：
-#   - 扩展代码：xxx.js
+#   - 扩展代码：xxx.js（仅作为代码本体，其自带头注释会被议题元数据覆盖）
 #   - 封面图：pb.png 或直接拖拽一张图片（作为该扩展的封面）
 #
 # 调试日志：本工作流每一步都会用 core.info 打印详细日志（含 ::group:: 分组），
@@ -87,29 +88,40 @@ jobs:
             log('跳过组织级权限校验（个人/信任仓库，议题关闭即同步）。触发者 =', github.actor);
             endGroup();
 
-            // 解析「名称 / 版本 / 作者」，支持每条一行或挤在一行
-            const field = (label, nextLabels) => {
-              const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const next = (nextLabels || []).map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-              const pat = next
-                ? `${esc}\\s*[:：]\\s*([\\s\\S]*?)(?=${next}\\s*[:：]|$)`
-                : `${esc}\\s*[:：]\\s*([\\s\\S]*?)$`;
-              const m = body.match(new RegExp(pat, 'i'));
-              return m ? m[1].trim() : '';
+            // 解析议题正文字段（元数据唯一来源）：扩展名称 / 作者 / 版本号 / 简介
+            // 兼容别名与任意顺序；冒号支持中英文，版本号可省略冒号
+            const ALL_LABELS = ['扩展名称', '名称', '作者', '版本号', '版本', '简介', '描述'];
+            const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const field = (...aliases) => {
+              const stops = ALL_LABELS.filter(l => !aliases.includes(l)).map(escRe).join('|');
+              for (const label of aliases) {
+                const pat = `${escRe(label)}\\s*[:：]?\\s*([^\\n]*?)(?=(?:${stops})\\s*[:：]|\\n|$)`;
+                const m = body.match(new RegExp(pat, 'i'));
+                if (m && m[1].trim()) return m[1].trim();
+              }
+              return '';
             };
 
-            // ===== 字段解析 =====
+            // ===== 字段解析（只信议题正文，不解析 js 头注释）=====
             group('④ 解析议题字段');
-            const name = field('名称', ['版本', '作者']);
-            const version = field('版本', ['作者']);
-            const author = field('作者');
-            log('名称 :', JSON.stringify(name));
-            log('版本 :', JSON.stringify(version) || '(空)');
-            log('作者 :', JSON.stringify(author) || '(空)');
+            const name = field('扩展名称', '名称');
+            // 作者链接一律删除：去掉 <link> 尖括号段、markdown 链接与裸 URL，只留人名
+            const authorRaw = field('作者');
+            const author = authorRaw
+              .replace(/<[^>]*>/g, '')
+              .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+              .replace(/https?:\/\/\S+/gi, '')
+              .trim();
+            const version = field('版本号', '版本');
+            const summary = field('简介', '描述');
+            log('扩展名称 :', JSON.stringify(name));
+            log('作者     :', JSON.stringify(author) || '(空)', authorRaw !== author ? '（已剔除链接）' : '');
+            log('版本号   :', JSON.stringify(version) || '(空)');
+            log('简介     :', JSON.stringify(summary) || '(空)');
             endGroup();
 
             if (!name) {
-              core.setFailed('议题未包含「名称」字段，无法同步。');
+              core.setFailed('议题未包含「扩展名称」字段，无法同步。');
               return;
             }
 
@@ -211,21 +223,27 @@ jobs:
             log('已下载字节数 :', code.length);
             endGroup();
 
-            // 若 .js 缺少元信息头，用议题字段补齐
-            if (!/^\s*\/\//.test(code)) {
-              group('⑧ 注入元信息头');
-              const header = [
-                '// id: ' + slug,
-                '// name: ' + name,
-                author ? '// by: ' + author : '',
-                version ? '// version: ' + version : ''
-              ].filter(Boolean).join('\n');
-              code = header + '\n' + code;
-              log('注入头 :\n' + header);
-              endGroup();
-            } else {
-              log('ℹ️ 扩展文件已含 // 元信息头，跳过注入。');
+            // 元数据以议题为准：丢弃 js 文件自带的顶部 // 头注释（builder 会解析它），
+            // 统一注入由议题字段生成的元信息头。js 文件只是代码附件。
+            group('⑧ 注入元信息头（以议题字段为准）');
+            const srcLines = code.split('\n');
+            let headEnd = 0;
+            while (headEnd < srcLines.length && /^\s*\/\//.test(srcLines[headEnd])) headEnd++;
+            if (headEnd > 0) {
+              log('已移除文件自带头注释行数 :', headEnd);
             }
+            code = srcLines.slice(headEnd).join('\n').replace(/^\s*\n/, '');
+            const header = [
+              '// Name: ' + name,
+              '// ID: ' + slug,
+              '// Description: ' + (summary || (name + ' 扩展。')),
+              author ? '// By: ' + author : '',
+              version ? '// Version: ' + version : '',
+              '// License: MIT'
+            ].filter(Boolean).join('\n');
+            code = header + '\n\n' + code;
+            log('注入头 :\n' + header);
+            endGroup();
 
             const jsPath = path.join(extDir, slug + '.js');
             fs.writeFileSync(jsPath, code);
@@ -338,9 +356,10 @@ jobs:
             // ===== 完成摘要 =====
             group('✅ 同步完成摘要');
             log('slug      :', slug);
-            log('名称      :', name);
-            log('版本      :', version || '(无)');
+            log('扩展名称  :', name);
+            log('版本号    :', version || '(无)');
             log('作者      :', author || '(无)');
+            log('简介      :', summary || '(无)');
             log('扩展文件  :', jsPath);
             log('封面图    :', imagePath || '(默认 unknown.svg)');
             log('扩展列表数:', list.length);

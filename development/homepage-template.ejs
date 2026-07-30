@@ -427,9 +427,10 @@
       <div class="extensions">
         <%
         const peopleToHTML = (people) => {
+          // 只显示作者名，不输出作者链接
           let result = '';
           for (let i = 0; i < people.length; i++) {
-            result += people[i].toHTML();
+            result += people[i].name;
             if (i === people.length - 1) {
               // do nothing
             } else if (i === people.length - 2) {
