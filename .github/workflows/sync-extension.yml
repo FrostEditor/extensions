@@ -172,10 +172,12 @@ jobs:
             }
 
             // 收集议题正文 + 所有评论里的 .js 附件链接
+            // 注意排除引号/尖括号：GitHub 拖图会生成 <img src="URL" /> HTML，
+            // 老正则 [^\s)\]]+ 会把尾部引号一起吞掉导致下载 404。
             const collectJs = (text) => {
               const out = [];
-              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.js/gi)) out.push(m[0]);
-              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/files\/[^\s)\]]+/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]"'<>]+\.js/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/files\/[^\s)\]"'<>]+/gi)) out.push(m[0]);
               return out;
             };
 
@@ -249,11 +251,11 @@ jobs:
             fs.writeFileSync(jsPath, code);
             log('✅ 已写入扩展文件 :', jsPath, '(' + code.length + ' 字节)');
 
-            // 收集封面图
+            // 收集封面图（同样排除引号/尖括号，兼容 <img src="..."> 与 markdown 两种写法）
             const collectImg = (text) => {
               const out = [];
-              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.(?:png|jpe?g|gif|webp)/gi)) out.push(m[0]);
-              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/assets\/[^\s)\]]+/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]"'<>]+\.(?:png|jpe?g|gif|webp)/gi)) out.push(m[0]);
+              for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/assets\/[^\s)\]"'<>]+/gi)) out.push(m[0]);
               return out;
             };
 
