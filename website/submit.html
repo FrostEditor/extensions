@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf8">
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>提交扩展 - FrostEditor 扩展库</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <meta name="theme-color" content="#00f099">
+    <meta name="description" content="如何把你的扩展提交到 FrostEditor 扩展库。">
+    <style>
+      :root {
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        color-scheme: light dark;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color: #eee;
+          background: #111;
+        }
+        a {
+          color: #56b2ff;
+        }
+        a:visited {
+          color: #f192ff;
+        }
+        a:active {
+          color: red;
+        }
+      }
+
+      h1 {
+        margin: 16px 0;
+      }
+      h2 {
+        margin: 32px 0 8px 0;
+        padding-bottom: 4px;
+        border-bottom: 2px solid rgba(0, 240, 153, 0.604);
+      }
+      h3, p, ul, ol {
+        margin: 8px 0;
+      }
+      li {
+        margin: 4px 0;
+      }
+
+      .section {
+        max-width: 928px;
+        margin: 24px auto;
+        padding: 0 12px;
+      }
+
+      .header h1 {
+        font-size: 2.5em;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: normal;
+        text-align: center;
+      }
+      .header .logo {
+        width: 56px;
+        height: 56px;
+        flex-shrink: 0;
+        margin: 0 8px 0 0;
+      }
+      @media (max-width: 750px) {
+        .header h1 {
+          flex-direction: column;
+        }
+        .header .logo {
+          margin: 0 0 8px 0;
+        }
+      }
+
+      .infobox, .warnbox {
+        padding: 8px;
+        margin: 8px 0;
+        border-radius: 8px;
+        background: rgba(0, 240, 153, 0.245);
+        border: 1px solid rgba(0, 240, 153, 0.604);
+      }
+      .warnbox {
+        background: rgba(255, 170, 0, 0.18);
+        border-color: rgba(255, 170, 0, 0.6);
+      }
+      .infobox-title {
+        font-weight: bold;
+        margin-bottom: 4px;
+      }
+
+      pre {
+        padding: 12px;
+        border-radius: 8px;
+        overflow-x: auto;
+        background: rgba(127, 127, 127, 0.12);
+        border: 1px solid rgba(127, 127, 127, 0.3);
+        line-height: 1.5;
+      }
+      code {
+        font-family: Consolas, Monaco, "Courier New", monospace;
+        background: rgba(127, 127, 127, 0.15);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      pre code {
+        background: none;
+        padding: 0;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 8px 0;
+      }
+      th, td {
+        border: 1px solid rgba(127, 127, 127, 0.4);
+        padding: 6px 10px;
+        text-align: left;
+      }
+      th {
+        background: rgba(0, 240, 153, 0.18);
+      }
+
+      .steps {
+        counter-reset: step;
+        list-style: none;
+        padding: 0;
+      }
+      .steps > li {
+        position: relative;
+        padding: 0 0 0 44px;
+        margin: 16px 0;
+      }
+      .steps > li::before {
+        counter-increment: step;
+        content: counter(step);
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #00f099;
+        color: #003b26;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .steps h3 {
+        margin-top: 2px;
+      }
+
+      .button {
+        display: inline-block;
+        background-color: #00f099;
+        color: #003b26;
+        font-weight: bold;
+        padding: 10px 20px;
+        border-radius: 8px;
+        text-decoration: none;
+        margin: 8px 0;
+      }
+      .button:visited {
+        color: #003b26;
+      }
+      .button:hover {
+        filter: brightness(1.08);
+      }
+
+      footer {
+        opacity: 0.8;
+        width: 100%;
+        text-align: center;
+        margin-bottom: 16px;
+      }
+      footer p {
+        margin: 0 0 8px 0;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="section header">
+      <h1>
+        <img src="/frosteditor.png" alt="FrostEditor" class="logo" />
+        <div>提交你的扩展</div>
+      </h1>
+      <p style="text-align: center;">
+        把你写好的扩展分享到 FrostEditor 扩展库，让所有人都能在编辑器里一键添加。
+      </p>
+      <p style="text-align: center;">
+        <a class="button" href="https://github.com/FrostEditor/extensions/issues/new">去 GitHub 提交扩展</a>
+        &nbsp;
+        <a href="/">← 返回扩展库</a>
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>提交流程（3 步）</h2>
+      <ol class="steps">
+        <li>
+          <h3>准备文件</h3>
+          <p>你需要准备两个文件：</p>
+          <ul>
+            <li><strong>扩展代码</strong>：一个 <code>.js</code> 文件（标准的 TurboWarp/Scratch 扩展格式，末尾调用 <code>Scratch.extensions.register(...)</code>）。</li>
+            <li><strong>封面图</strong>（可选但强烈建议）：一张 <code>png / jpg</code> 图片，比例 <strong>2:1</strong>（推荐 600×300 或更大），会显示在扩展卡片上。不传则使用默认封面。</li>
+          </ul>
+        </li>
+        <li>
+          <h3>新建议题（Issue）并按格式填写</h3>
+          <p>
+            在 <a href="https://github.com/FrostEditor/extensions/issues/new">仓库的 Issues 页面</a>新建一个议题，
+            正文按下面的格式填写扩展信息，然后把 <code>.js</code> 文件和封面图<strong>直接拖进正文</strong>作为附件上传：
+          </p>
+<pre><code>扩展名称：千絮模糊
+作者：QXBurry
+版本号：1.0.0
+简介：为你的角色添加模糊效果，搭配图片扩展使用更佳</code></pre>
+          <p>一行一个字段，不需要空行。写完确认附件链接已经出现在正文里，再点「Submit new issue」。</p>
+        </li>
+        <li>
+          <h3>等待审核</h3>
+          <p>
+            管理员会对扩展代码做安全审查。审查通过后<strong>关闭议题</strong>，系统会自动把扩展同步到扩展库并重新构建站点，
+            几分钟后你的扩展就会出现在<a href="/">首页</a>和编辑器的「添加扩展」菜单中。
+          </p>
+        </li>
+      </ol>
+
+      <h2>字段说明</h2>
+      <table>
+        <tr>
+          <th>字段</th>
+          <th>必填</th>
+          <th>说明</th>
+        </tr>
+        <tr>
+          <td><code>扩展名称</code></td>
+          <td>是</td>
+          <td>显示在卡片上的名称。也可以写作「名称」。</td>
+        </tr>
+        <tr>
+          <td><code>作者</code></td>
+          <td>否</td>
+          <td>只写人名即可。<strong>附带的链接会被自动删除</strong>（如 <code>张三 &lt;https://…&gt;</code> 或 <code>[张三](https://…)</code> 最终都只保留「张三」）。</td>
+        </tr>
+        <tr>
+          <td><code>版本号</code></td>
+          <td>否</td>
+          <td>如 <code>1.0.0</code>。也可以写作「版本」，冒号可省略。</td>
+        </tr>
+        <tr>
+          <td><code>简介</code></td>
+          <td>否</td>
+          <td>一句话介绍，显示在卡片上。<strong>请写在一行内</strong>（多行只取第一行）。也可以写作「描述」。</td>
+        </tr>
+      </table>
+      <p>中文冒号 <code>：</code> 和英文冒号 <code>:</code> 都可以。</p>
+
+      <h2>注意事项</h2>
+      <div class="warnbox">
+        <div class="infobox-title">议题正文是唯一的信息来源</div>
+        <code>.js</code> 文件里自带的 <code>//</code> 头注释（Name / By / Description 等）会被<strong>整体覆盖</strong>，
+        卡片最终显示的名称、作者、简介完全以议题正文为准。
+      </div>
+      <ul>
+        <li><strong>安全要求</strong>：扩展在编辑器中以「无沙箱」方式运行，权限很高。禁止包含恶意代码、窃取数据、挖矿、混淆到无法审查的代码。无法完成审查的扩展会被拒绝。</li>
+        <li><strong>许可协议</strong>：提交即表示你同意扩展以 <strong>MIT 协议</strong>收录进本仓库。请勿提交你没有权利分享的代码。</li>
+        <li><strong>重复提交</strong>：与已有扩展功能相同的重复提交可能被合并或拒绝。</li>
+      </ul>
+
+      <h2>如何更新已收录的扩展</h2>
+      <p>
+        重新打开（Reopen）你当初提交的<strong>同一个议题</strong>，替换正文里的附件、更新字段内容，
+        然后由管理员再次关闭——系统会识别出这是同一个议题，<strong>覆盖更新</strong>原扩展而不是新建一个副本。
+      </p>
+
+      <h2>如何下架扩展</h2>
+      <p>
+        在原议题下留言说明希望下架，或新建议题说明理由。管理员会将扩展从列表移除
+        （若已有作品在使用该扩展，一般只从首页下架、保留文件，避免破坏现有作品）。
+      </p>
+
+      <h2>常见问题</h2>
+      <h3>关闭议题后多久生效？</h3>
+      <p>同步通常在 1 分钟内完成，站点重新构建需要几分钟。清一下浏览器缓存或使用无痕窗口即可看到最新内容。</p>
+      <h3>封面图没显示？</h3>
+      <p>确认图片是拖拽上传到议题正文中的（正文里能看到图片预览），且为 png/jpg 格式。如果仍有问题，在议题下留言联系管理员。</p>
+      <h3>我不会写扩展，去哪里学？</h3>
+      <p>参考 <a href="https://docs.turbowarp.org/development/extensions/introduction">TurboWarp 扩展开发文档</a>——FrostEditor 与 TurboWarp 扩展格式完全兼容。</p>
+    </div>
+
+    <footer class="section">
+      <p><a href="/">返回扩展库首页</a></p>
+      <p>FrostEditor 与 Scratch、Scratch 团队或 Scratch 基金会无任何关联。</p>
+    </footer>
+  </body>
+</html>
