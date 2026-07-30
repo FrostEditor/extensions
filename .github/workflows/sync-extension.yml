@@ -31,10 +31,12 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'workflow_dispatch' || contains(github.event.issue.body, '名称')
+      github.event_name == 'workflow_dispatch' || (github.event.issue && contains(github.event.issue.body, '名称'))
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Parse issue and sync extension
         uses: actions/github-script@v7
@@ -314,17 +316,25 @@ jobs:
 
             // ===== 提交并推送 =====
             group('⑪ 提交到仓库');
-            execSync('git config user.name "github-actions[bot]"');
-            execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
-            const addTargets = [jsonPath, jsPath];
-            if (imagePath) addTargets.push(imagePath);
-            log('git add :', addTargets.join(' '));
-            execSync(`git add ${addTargets.join(' ')}`);
-            const commitMsg = `sync: ${slug} (from issue #${issueNumber})`;
-            execSync(`git commit -m "${commitMsg}"`);
-            log('commit :', commitMsg);
-            execSync('git push');
-            log('✅ 已推送到远程。');
+            try {
+              execSync('git config user.name "github-actions[bot]"');
+              execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
+              const addTargets = [jsonPath, jsPath];
+              if (imagePath) addTargets.push(imagePath);
+              log('git add :', addTargets.join(' '));
+              execSync(`git add ${addTargets.join(' ')}`);
+              const commitMsg = `sync: ${slug} (from issue #${issueNumber})`;
+              execSync(`git commit -m "${commitMsg}"`);
+              log('commit :', commitMsg);
+              execSync('git push');
+              log('✅ 已推送到远程。');
+            } catch (e) {
+              log('❌ 提交/推送失败：', e.message);
+              log('（若因分支保护导致 push 失败，请在仓库 Settings → Branches 放行 github-actions[bot]，或改用 PR 方式同步）');
+              endGroup();
+              core.setFailed('git 提交或推送失败：' + e.message);
+              return;
+            }
             endGroup();
 
             // 触发部署工作流
