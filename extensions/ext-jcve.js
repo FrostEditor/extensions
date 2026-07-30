@@ -1,6 +1,6 @@
 // Name: QXBurry
 // ID: burry
-// Description: 为你的角色作品模糊，搭配“图片”扩展使用更佳
+// Description: 为你的角色作品模糊，搭配“图片”扩展使用更佳。
 // By: 作者 <https://www.qxweb.top>
 // License: MIT
 
