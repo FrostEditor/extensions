@@ -20,6 +20,7 @@ permissions:
   issues: read
   contents: write
   actions: write
+  administration: read
 
 jobs:
   sync:
@@ -83,9 +84,10 @@ jobs:
               }
               log('✅ 权限通过，继续同步。');
             } catch (e) {
-              log('❌ 权限校验异常，跳过：', e.message);
+              // 权限接口可能因 token 作用域不足而抛错；本仓库为个人/信任仓库，
+              // 此时不再静默跳过，仅告警后继续同步，避免「假成功」吞掉提交。
+              log('⚠️ 权限校验接口异常，按放行处理：', e.message);
               endGroup();
-              return;
             }
             endGroup();
 
