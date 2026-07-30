@@ -8,6 +8,9 @@ name: Sync Extension from Issue
 # 附件要求：
 #   - 扩展代码：xxx.js
 #   - 封面图：pb.png 或直接拖拽一张图片（作为该扩展的封面）
+#
+# 调试日志：本工作流每一步都会用 core.info 打印详细日志（含 ::group:: 分组），
+# 关闭议题后到 GitHub 仓库 Actions 标签页点开本运行即可查看（这就是同步过程的"控制台"）。
 
 on:
   issues:
@@ -35,7 +38,21 @@ jobs:
             const path = require('path');
             const { execSync } = require('child_process');
 
+            // ===== 统一的日志辅助 =====
+            const log = (...a) => core.info(a.join(' '));
+            const group = (title) => core.info('::group::' + title);
+            const endGroup = () => core.info('::endgroup::');
+
             const issueNumber = context.payload.issue.number;
+            const issueTitle = context.payload.issue.title || '(无标题)';
+
+            // ===== 运行开始：基本信息 =====
+            group('① 同步任务启动');
+            log('仓库     :', context.repo.owner + '/' + context.repo.repo);
+            log('议题编号 :', '#' + issueNumber, '—', JSON.stringify(issueTitle));
+            log('关闭者   :', github.actor);
+            log('触发事件 :', context.eventName + '/' + (context.payload.action || ''));
+            endGroup();
 
             // 通过 API 取最新 issue 正文（附件以 markdown 链接形式存在于 body/评论中）
             const issue = await github.rest.issues.get({
@@ -45,21 +62,32 @@ jobs:
             });
             const body = issue.data.body || '';
 
+            // ===== 议题正文 =====
+            group('② 议题正文（截断 2000 字）');
+            log(body.length > 2000 ? body.slice(0, 2000) + '\n…(已截断)' : body || '(空)');
+            endGroup();
+
             // 仅允许有关联写入/管理员权限的人关闭的议题同步（兼容组织仓库）
+            group('③ 权限校验');
             try {
               const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 username: github.actor
               });
+              log('关闭者', github.actor, '权限级别 =', perm.permission);
               if (!['admin', 'write'].includes(perm.permission)) {
-                core.info('关闭者(' + github.actor + ') 无写入权限，跳过同步。');
+                log('❌ 无写入权限，跳过同步。');
+                endGroup();
                 return;
               }
+              log('✅ 权限通过，继续同步。');
             } catch (e) {
-              core.info('权限校验失败，跳过：' + e.message);
+              log('❌ 权限校验异常，跳过：', e.message);
+              endGroup();
               return;
             }
+            endGroup();
 
             // 解析「名称 / 版本 / 作者」，支持每条一行或挤在一行
             const field = (label, nextLabels) => {
@@ -71,18 +99,23 @@ jobs:
               const m = body.match(new RegExp(pat, 'i'));
               return m ? m[1].trim() : '';
             };
+
+            // ===== 字段解析 =====
+            group('④ 解析议题字段');
             const name = field('名称', ['版本', '作者']);
             const version = field('版本', ['作者']);
             const author = field('作者');
+            log('名称 :', JSON.stringify(name));
+            log('版本 :', JSON.stringify(version) || '(空)');
+            log('作者 :', JSON.stringify(author) || '(空)');
+            endGroup();
 
             if (!name) {
-              core.info('议题未包含「名称」，跳过。');
+              core.setFailed('议题未包含「名称」字段，无法同步。');
               return;
             }
 
             // 生成 ASCII 安全的 slug/id（支持中文等任意名称）
-            // - 若名称含 ASCII 字母/数字，则清洗为 ascii slug
-            // - 否则用名称的确定性短哈希（ext-xxxxxx），避免空 slug 导致失败
             function makeSlug(input) {
               const lower = (input || '').toLowerCase().trim();
               let s = lower
@@ -97,16 +130,16 @@ jobs:
               }
               return 'ext-' + (h >>> 0).toString(36);
             }
+
+            // ===== slug 生成 + 去重 =====
+            group('⑤ 生成 slug 与去重');
             let slug = makeSlug(name);
-            if (!slug) {
-              core.setFailed('无法从「名称」生成标识：' + name);
-              return;
-            }
+            log('原始名称 :', JSON.stringify(name));
+            log('初始 slug :', slug);
 
             const extDir = 'extensions/extensions';
             fs.mkdirSync(extDir, { recursive: true });
 
-            // 加载现有列表用于 slug 去重
             const jsonPath = path.join(extDir, 'extensions.json');
             let list = [];
             if (fs.existsSync(jsonPath)) {
@@ -114,20 +147,30 @@ jobs:
               try { list = JSON.parse(raw || '[]'); } catch (e) { list = []; }
             }
             if (!Array.isArray(list)) list = [];
+            log('当前列表已含扩展数 :', list.length);
             if (list.includes(slug)) {
               let i = 2;
               while (list.includes(slug + '-' + i)) i++;
               slug = slug + '-' + i;
+              log('⚠️ slug 已存在，重命名为 :', slug);
+            }
+            endGroup();
+
+            if (!slug) {
+              core.setFailed('无法从「名称」生成标识：' + name);
+              return;
             }
 
             // 收集议题正文 + 所有评论里的 .js 附件链接
-            // 同时兼容新版 github user-attachments 链接（无 .js 后缀形式）
             const collectJs = (text) => {
               const out = [];
               for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.js/gi)) out.push(m[0]);
               for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/files\/[^\s)\]]+/gi)) out.push(m[0]);
               return out;
             };
+
+            // ===== 收集 .js 链接 =====
+            group('⑥ 收集 .js 扩展链接');
             const jsUrls = collectJs(body);
             try {
               const comments = await github.rest.issues.listComments({
@@ -138,27 +181,41 @@ jobs:
               });
               for (const c of (comments.data || [])) jsUrls.push(...collectJs(c.body));
             } catch (e) {
-              core.info('读取评论失败，仅使用正文链接：' + e.message);
+              log('读取评论失败，仅使用正文链接：', e.message);
             }
             if (jsUrls.length === 0) {
+              log('❌ 未找到任何 .js 链接。');
+              endGroup();
               core.setFailed('议题正文及评论中均未找到 .js 附件链接。');
               return;
             }
+            jsUrls.forEach((u, i) => log('  [' + i + ']', u));
             const jsUrl = jsUrls[0];
+            log('✅ 选用链接 :', jsUrl);
+            endGroup();
 
-            // 下载 .js（跟随重定向，带 token 以兼容私有仓库）
+            // ===== 下载 .js =====
+            group('⑦ 下载扩展代码');
+            log('GET', jsUrl);
             const res = await fetch(jsUrl, {
               redirect: 'follow',
               headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
             });
+            log('HTTP 状态 :', res.status, res.statusText);
+            log('Content-Type :', res.headers.get('content-type'));
+            log('Content-Length :', res.headers.get('content-length'));
             if (!res.ok) {
+              endGroup();
               core.setFailed('下载扩展失败：HTTP ' + res.status);
               return;
             }
             let code = await res.text();
+            log('已下载字节数 :', code.length);
+            endGroup();
 
             // 若 .js 缺少元信息头，用议题字段补齐
             if (!/^\s*\/\//.test(code)) {
+              group('⑧ 注入元信息头');
               const header = [
                 '// id: ' + slug,
                 '// name: ' + name,
@@ -166,18 +223,26 @@ jobs:
                 version ? '// version: ' + version : ''
               ].filter(Boolean).join('\n');
               code = header + '\n' + code;
+              log('注入头 :\n' + header);
+              endGroup();
+            } else {
+              log('ℹ️ 扩展文件已含 // 元信息头，跳过注入。');
             }
 
-            fs.writeFileSync(path.join(extDir, slug + '.js'), code);
+            const jsPath = path.join(extDir, slug + '.js');
+            fs.writeFileSync(jsPath, code);
+            log('✅ 已写入扩展文件 :', jsPath, '(' + code.length + ' 字节)');
 
-            // 收集封面图：优先名为 pb.png 的附件，其次任意图片附件。
-            // 兼容 github user-attachments/assets/<uuid> 形式（无 .png 后缀）。
+            // 收集封面图
             const collectImg = (text) => {
               const out = [];
               for (const m of (text || '').matchAll(/https?:\/\/[^\s)\]]+\.(?:png|jpe?g|gif|webp)/gi)) out.push(m[0]);
               for (const m of (text || '').matchAll(/https?:\/\/github\.com\/user-attachments\/assets\/[^\s)\]]+/gi)) out.push(m[0]);
               return out;
             };
+
+            // ===== 收集并下载封面图 =====
+            group('⑨ 收集封面图');
             const imgUrls = collectImg(body);
             try {
               const comments = await github.rest.issues.listComments({
@@ -188,18 +253,26 @@ jobs:
               });
               for (const c of (comments.data || [])) imgUrls.push(...collectImg(c.body));
             } catch (e) { /* 忽略 */ }
+            if (imgUrls.length === 0) {
+              log('未找到任何图片链接。');
+            } else {
+              imgUrls.forEach((u, i) => log('  [' + i + ']', u));
+            }
             const pbUrl = imgUrls.find(u => /\/pb\.png(\?|$)/i.test(u)) || imgUrls[0];
+            log('选用封面链接 :', pbUrl || '(无)');
 
             let imagePath = null;
             if (pbUrl) {
               try {
+                log('GET', pbUrl);
                 const imgRes = await fetch(pbUrl, {
                   redirect: 'follow',
                   headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
                 });
+                log('HTTP 状态 :', imgRes.status, imgRes.statusText);
                 if (imgRes.ok) {
                   const buf = Buffer.from(await imgRes.arrayBuffer());
-                  // 依据真实内容判定扩展名（github 可能把 png 重命名为 uuid）
+                  log('已下载字节数 :', buf.length);
                   const isPng = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
                   const isJpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
                   const ext = isJpg ? 'jpg' : 'png';
@@ -207,34 +280,62 @@ jobs:
                   fs.mkdirSync(imgDir, { recursive: true });
                   imagePath = path.join(imgDir, slug + '.' + ext);
                   fs.writeFileSync(imagePath, buf);
-                  core.info('已保存封面图：' + path.basename(imagePath));
+                  log('✅ 已保存封面图 :', imagePath, '(格式判定:', ext + ')');
                 } else {
-                  core.info('封面图下载失败：HTTP ' + imgRes.status);
+                  log('❌ 封面图下载失败：HTTP', imgRes.status);
                 }
               } catch (e) {
-                core.info('封面图处理出错：' + e.message);
+                log('❌ 封面图处理出错：', e.message);
               }
             } else {
-              core.info('未找到封面图，将使用默认封面。');
+              log('ℹ️ 未找到封面图，将使用默认封面 unknown.svg。');
             }
+            endGroup();
 
-            // 更新 extensions.json（受支持的扩展列表）
+            // ===== 更新扩展列表 =====
+            group('⑩ 更新 extensions.json');
             if (!list.includes(slug)) list.push(slug);
             fs.writeFileSync(jsonPath, JSON.stringify(list, null, 2) + '\n');
+            log('新列表 :', JSON.stringify(list));
+            endGroup();
 
-            // 提交并推送
+            // ===== 提交并推送 =====
+            group('⑪ 提交到仓库');
             execSync('git config user.name "github-actions[bot]"');
             execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
-            const addTargets = [jsonPath, path.join(extDir, slug + '.js')];
+            const addTargets = [jsonPath, jsPath];
             if (imagePath) addTargets.push(imagePath);
+            log('git add :', addTargets.join(' '));
             execSync(`git add ${addTargets.join(' ')}`);
-            execSync(`git commit -m "sync: ${slug} (from issue #${issueNumber})"`);
+            const commitMsg = `sync: ${slug} (from issue #${issueNumber})`;
+            execSync(`git commit -m "${commitMsg}"`);
+            log('commit :', commitMsg);
             execSync('git push');
+            log('✅ 已推送到远程。');
+            endGroup();
 
-            // 触发部署工作流（GITHUB_TOKEN 的 push 不会自动触发其它工作流，故显式调度）
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'deploy.yml',
-              ref: 'master'
-            });
+            // 触发部署工作流
+            group('⑫ 触发部署工作流');
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'deploy.yml',
+                ref: 'master'
+              });
+              log('✅ 已触发 deploy.yml (ref=master)');
+            } catch (e) {
+              log('⚠️ 触发部署失败（不影响已提交的扩展）：', e.message);
+            }
+            endGroup();
+
+            // ===== 完成摘要 =====
+            group('✅ 同步完成摘要');
+            log('slug      :', slug);
+            log('名称      :', name);
+            log('版本      :', version || '(无)');
+            log('作者      :', author || '(无)');
+            log('扩展文件  :', jsPath);
+            log('封面图    :', imagePath || '(默认 unknown.svg)');
+            log('扩展列表数:', list.length);
+            endGroup();
